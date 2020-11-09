@@ -1,14 +1,17 @@
+/* ZFinX extension introduced by IAK @ Huawei Technologies Research & Development (Uk) Limited, November 2020*/ 
 #pragma once
 #include "sail.h"
 
 bool sys_enable_rvc(unit);
 bool sys_enable_fdext(unit);
+bool sys_enable_zfinx(unit);
 bool sys_enable_writable_misa(unit);
 
 bool plat_enable_dirty_update(unit);
 bool plat_enable_misaligned_access(unit);
 bool plat_mtval_has_illegal_inst_bits(unit);
 bool plat_enable_pmp(unit);
+
 
 mach_bits plat_ram_base(unit);
 mach_bits plat_ram_size(unit);

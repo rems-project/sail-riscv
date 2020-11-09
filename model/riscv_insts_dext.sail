@@ -5,7 +5,8 @@
 /* RISC-V follows IEEE 754-2008 floating point arithmetic standard. */
 
 /* Original version written by Rishiyur S. Nikhil, Sept-Oct 2019    */
-
+/* ZFinX extension introduced by IAK @ Huawei                       */
+/*   Technologies Research & Development (Uk) Limited, November 2020*/
 /* **************************************************************** */
 /* IMPORTANT!                                                       */
 /* The files 'riscv_insts_fext.sail' and 'riscv_insts_dext.sail'    */
@@ -33,6 +34,15 @@ function fmake_D (sign, exp, mant) = sign @ exp @ mant
 /* ---- Canonical NaNs */
 
 function canonical_NaN_D() -> bits(64) = 0x_7ff8_0000_0000_0000
+
+/*Retrive the correct value for RV32D*/ 
+val      Xd : bits(5)-> bits(64)
+function Xd   index =
+  if (sizeof(xlen) == 64)
+  then X(index)
+  else if (index == 0b00000)
+  then X(index)@X(index)
+  else X(index+1)@X(index)
 
 /* ---- Structure tests */
 
@@ -252,9 +262,16 @@ mapping clause encdec =
 /* Execution semantics ================================ */
 
 function clause execute (F_MADD_TYPE_D(rs3, rs2, rs1, rm, rd, op)) = {
-  let rs1_val_64b = F(rs1);
-  let rs2_val_64b = F(rs2);
-  let rs3_val_64b = F(rs3);
+  
+  if ((sys_enable_zfinx() & sizeof(xlen) == 32) & (rs1[0] == bitone | rs2[0] == bitone | rs3[0] == bitone | rd[0] == bitone ) ) then {
+    handle_illegal();
+    RETIRE_FAIL
+  } else {
+  let (rs1_val_64b,rs2_val_64b,rs3_val_64b) : (bits(64),bits(64),bits(64)) = match (sizeof(xlen),sys_enable_zfinx()) {
+            (64,true)  => (X(rs1),X(rs2),X(rs3)),
+            (32,true)  => (Xd(rs1),Xd(rs2),Xd(rs3)),
+            (_)   => (F(rs1),F(rs2),F(rs3))
+  };
   let rm_3b       = encdec_rounding_mode (select_instr_or_fcsr_rm  (rm));
   let (fflags, rd_val_64b) : (bits(5), bits(64)) =
     match op {
@@ -264,10 +281,17 @@ function clause execute (F_MADD_TYPE_D(rs3, rs2, rs1, rm, rd, op)) = {
       FNMADD_D => riscv_f64MulAdd (rm_3b, negate_D (rs1_val_64b), rs2_val_64b, negate_D (rs3_val_64b))
     };
   write_fflags(fflags);
-  F(rd) = rd_val_64b;
+  if   ( sys_enable_zfinx() & (sizeof(xlen) == 32 & rd != 0b00000) ) then {
+    X(rd) = rd_val_64b[31..0];
+    X(rd+1) = rd_val_64b[63..32]}
+  else if (sys_enable_zfinx() & sizeof(xlen) == 64) then {
+    X(rd) = rd_val_64b
+  }
+  else F(rd) = rd_val_64b;
+
   RETIRE_SUCCESS
 }
-
+}
 /* AST -> Assembly notation ================================ */
 
 mapping f_madd_type_mnemonic_D : f_madd_op_D <-> string = {
@@ -313,8 +337,18 @@ mapping clause encdec =
 /* Execution semantics ================================ */
 
 function clause execute (F_BIN_RM_TYPE_D(rs2, rs1, rm, rd, op)) = {
-  let rs1_val_64b = F(rs1);
-  let rs2_val_64b = F(rs2);
+
+if ((sys_enable_zfinx() & sizeof(xlen) == 32) & (rs1[0] == bitone | rs2[0] == bitone | rd[0] == bitone ) ) then {
+  handle_illegal();
+  RETIRE_FAIL
+} else { 
+  let (rs1_val_64b,rs2_val_64b) : (bits(64),bits(64)) = match (sizeof(xlen),sys_enable_zfinx()) {
+  (64,true)  => (X(rs1),X(rs2)),
+  (32,true)  => (Xd(rs1),Xd(rs2)),
+  (_)   => (F(rs1),F(rs2))
+  };
+  
+
   let rm_3b       = encdec_rounding_mode (select_instr_or_fcsr_rm  (rm));
   let (fflags, rd_val_64b) : (bits(5), bits(64)) = match op {
     FADD_D  => riscv_f64Add (rm_3b, rs1_val_64b, rs2_val_64b),
@@ -323,8 +357,16 @@ function clause execute (F_BIN_RM_TYPE_D(rs2, rs1, rm, rd, op)) = {
     FDIV_D  => riscv_f64Div (rm_3b, rs1_val_64b, rs2_val_64b)
   };
   write_fflags(fflags);
-  F(rd) = rd_val_64b;
-  RETIRE_SUCCESS
+  if   ( sys_enable_zfinx() & (sizeof(xlen) == 32) & rd != 0b00000) then {
+    X(rd) = rd_val_64b[31..0];
+    X(rd+1) = rd_val_64b[63..32]}
+  else if (sys_enable_zfinx() & sizeof(xlen) == 64) then {
+    X(rd) = rd_val_64b
+  }
+  else F(rd) = rd_val_64b;
+  RETIRE_SUCCESS;
+  
+}
 }
 
 /* AST -> Assembly notation ================================ */
@@ -401,18 +443,43 @@ mapping clause encdec =
 /* Execution semantics ================================ */
 
 function clause execute (F_UN_RM_TYPE_D(rs1, rm, rd, FSQRT_D)) = {
-  let rs1_val_D = F(rs1);
+  if ((sys_enable_zfinx() & sizeof(xlen) == 32) & (rs1[0] == bitone | rd[0] == bitone ) ) then {
+  handle_illegal();
+  RETIRE_FAIL
+  } else { 
+  let rs1_val_D : bits(64) = match (sizeof(xlen),sys_enable_zfinx()) {
+  (64,true)  => X(rs1),
+  (32,true)  => Xd(rs1),
+  (_)   => F(rs1)
+  };
+
   let rm_3b     = encdec_rounding_mode (select_instr_or_fcsr_rm  (rm));
 
   let (fflags, rd_val_D) = riscv_f64Sqrt   (rm_3b, rs1_val_D);
 
   write_fflags(fflags);
-  F(rd) = rd_val_D;
+  if   ( sys_enable_zfinx() & (sizeof(xlen) == 32) & rd != 0b00000) then {
+      X(rd) = rd_val_D[31..0];
+      X(rd+1) = rd_val_D[63..32]}
+    else if (sys_enable_zfinx() & sizeof(xlen) == 64) then {
+      X(rd) = rd_val_D
+  }
+  else F(rd) = rd_val_D;
+    
   RETIRE_SUCCESS
+  }
 }
 
 function clause execute (F_UN_RM_TYPE_D(rs1, rm, rd, FCVT_W_D)) = {
-  let rs1_val_D = F(rs1);
+  if ((sys_enable_zfinx() & sizeof(xlen) == 32) & (rs1[0] == bitone | rd[0] == bitone ) ) then {
+  handle_illegal();
+  RETIRE_FAIL
+  } else { 
+  let rs1_val_D : bits(64) = match (sizeof(xlen),sys_enable_zfinx()) {
+  (64,true)  => X(rs1),
+  (32,true)  => Xd(rs1),
+  (_)   => F(rs1)
+  };
   let rm_3b     = encdec_rounding_mode (select_instr_or_fcsr_rm  (rm));
 
   let (fflags, rd_val_W) = riscv_f64ToI32 (rm_3b, rs1_val_D);
@@ -420,10 +487,19 @@ function clause execute (F_UN_RM_TYPE_D(rs1, rm, rd, FCVT_W_D)) = {
   write_fflags(fflags);
   X(rd) = EXTS (rd_val_W);
   RETIRE_SUCCESS
+  }
 }
 
 function clause execute (F_UN_RM_TYPE_D(rs1, rm, rd, FCVT_WU_D)) = {
-  let rs1_val_D = F(rs1);
+  if ((sys_enable_zfinx() & sizeof(xlen) == 32) & (rs1[0] == bitone | rd[0] == bitone ) ) then {
+  handle_illegal();
+  RETIRE_FAIL
+  } else { 
+  let rs1_val_D : bits(64) = match (sizeof(xlen),sys_enable_zfinx()) {
+  (64,true)  => X(rs1),
+  (32,true)  => Xd(rs1),
+  (_)   => F(rs1)
+  };
   let rm_3b     = encdec_rounding_mode (select_instr_or_fcsr_rm  (rm));
 
   let (fflags, rd_val_WU) = riscv_f64ToUi32 (rm_3b, rs1_val_D);
@@ -431,7 +507,8 @@ function clause execute (F_UN_RM_TYPE_D(rs1, rm, rd, FCVT_WU_D)) = {
   write_fflags(fflags);
   X(rd) = EXTS (rd_val_WU);
   RETIRE_SUCCESS
-}
+  }
+  }
 
 function clause execute (F_UN_RM_TYPE_D(rs1, rm, rd, FCVT_D_W)) = {
   let rs1_val_W = X(rs1) [31..0];
@@ -440,7 +517,15 @@ function clause execute (F_UN_RM_TYPE_D(rs1, rm, rd, FCVT_D_W)) = {
   let (fflags, rd_val_D) = riscv_i32ToF64 (rm_3b, rs1_val_W);
 
   write_fflags(fflags);
-  F(rd) = rd_val_D;
+
+if   ( sys_enable_zfinx() & (sizeof(xlen) == 32)& rd != 0b00000) then {
+    X(rd) = rd_val_D[31..0];
+    X(rd+1) = rd_val_D[63..32]}
+  else if (sys_enable_zfinx() & sizeof(xlen) == 64) then {
+    X(rd) = rd_val_D
+  }
+  else F(rd) = rd_val_D;
+
   RETIRE_SUCCESS
 }
 
@@ -451,34 +536,77 @@ function clause execute (F_UN_RM_TYPE_D(rs1, rm, rd, FCVT_D_WU)) = {
   let (fflags, rd_val_D) = riscv_ui32ToF64 (rm_3b, rs1_val_WU);
 
   write_fflags(fflags);
-  F(rd) = rd_val_D;
+  if   ( sys_enable_zfinx() & (sizeof(xlen) == 32)& rd != 0b00000) then {
+    X(rd) = rd_val_D[31..0];
+    X(rd+1) = rd_val_D[63..32]}
+  else if (sys_enable_zfinx() & sizeof(xlen) == 64) then {
+    X(rd) = rd_val_D
+  }
+  else F(rd) = rd_val_D;
+
   RETIRE_SUCCESS
+
 }
 
 function clause execute (F_UN_RM_TYPE_D(rs1, rm, rd, FCVT_S_D)) = {
-  let rs1_val_D = F(rs1);
+  if ((sys_enable_zfinx() & sizeof(xlen) == 32) & (rs1[0] == bitone | rd[0] == bitone ) ) then {
+  handle_illegal();
+  RETIRE_FAIL
+  } else { 
+  let rs1_val_D : bits(64) = match (sizeof(xlen),sys_enable_zfinx()) {
+  (64,true)  => X(rs1),
+  (32,true)  => Xd(rs1),
+  (_)   => F(rs1)
+  };
   let rm_3b     = encdec_rounding_mode (select_instr_or_fcsr_rm  (rm));
 
   let (fflags, rd_val_S) = riscv_f64ToF32 (rm_3b, rs1_val_D);
 
   write_fflags(fflags);
-  F(rd) = nan_box (rd_val_S);
+
+  if   ( sys_enable_zfinx() & (sizeof(xlen) == 32)& rd != 0b00000) then {
+    X(rd) = nan_box (rd_val_S)[31..0];
+    X(rd+1) = nan_box (rd_val_S)[63..32]}
+  else if (sys_enable_zfinx() & sizeof(xlen) == 64) then {
+    X(rd) = nan_box (rd_val_S)
+  }
+  else F(rd) = nan_box (rd_val_S);
   RETIRE_SUCCESS
+}
 }
 
 function clause execute (F_UN_RM_TYPE_D(rs1, rm, rd, FCVT_D_S)) = {
-  let rs1_val_S = nan_unbox (F(rs1));
+  if ((sys_enable_zfinx() & sizeof(xlen) == 32) & (rs1[0] == bitone | rd[0] == bitone ) ) then {
+  handle_illegal();
+  RETIRE_FAIL
+  } else { 
+  let rs1_val_S : bits(32) = match (sizeof(xlen),sys_enable_zfinx()) {
+  (64,true)  => nan_unbox(X(rs1)),
+  (32,true)  => nan_unbox(Xd(rs1)),
+  (_)   => nan_unbox(F(rs1))
+  };
   let rm_3b     = encdec_rounding_mode (select_instr_or_fcsr_rm  (rm));
 
   let (fflags, rd_val_D) = riscv_f32ToF64 (rm_3b, rs1_val_S);
 
   write_fflags(fflags);
-  F(rd) = rd_val_D;
+
+  if   ( sys_enable_zfinx() & (sizeof(xlen) == 32)& rd != 0b00000) then {
+      X(rd) = rd_val_D[31..0];
+      X(rd+1) = rd_val_D[63..32]}
+    else if (sys_enable_zfinx() & sizeof(xlen) == 64) then {
+      X(rd) = rd_val_D
+    }
+  else F(rd) = rd_val_D;
+
   RETIRE_SUCCESS
-}
+  }
+} 
 
 function clause execute (F_UN_RM_TYPE_D(rs1, rm, rd, FCVT_L_D)) = {
-  let rs1_val_D = F(rs1);
+  if   sizeof(xlen) == 64
+  then {
+  let rs1_val_D = (if (sys_enable_zfinx()) then X(rs1) else F(rs1));
   let rm_3b     = encdec_rounding_mode (select_instr_or_fcsr_rm  (rm));
 
   let (fflags, rd_val_L) = riscv_f64ToI64 (rm_3b, rs1_val_D);
@@ -486,10 +614,18 @@ function clause execute (F_UN_RM_TYPE_D(rs1, rm, rd, FCVT_L_D)) = {
   write_fflags(fflags);
   X(rd) = rd_val_L;
   RETIRE_SUCCESS
+  }
+  else {
+  /* this would not decode on RV32 */
+  RETIRE_FAIL
+  }
 }
 
 function clause execute (F_UN_RM_TYPE_D(rs1, rm, rd, FCVT_LU_D)) = {
-  let rs1_val_D = F(rs1);
+  if sizeof(xlen) == 64
+  then
+  {
+  let rs1_val_D = (if (sys_enable_zfinx()) then X(rs1) else F(rs1));
   let rm_3b     = encdec_rounding_mode (select_instr_or_fcsr_rm  (rm));
 
   let (fflags, rd_val_LU) = riscv_f64ToUi64 (rm_3b, rs1_val_D);
@@ -497,28 +633,54 @@ function clause execute (F_UN_RM_TYPE_D(rs1, rm, rd, FCVT_LU_D)) = {
   write_fflags(fflags);
   X(rd) = rd_val_LU;
   RETIRE_SUCCESS
+  }
+  else {
+  /* this would not decode on RV32 */
+  RETIRE_FAIL
+  }
 }
 
 function clause execute (F_UN_RM_TYPE_D(rs1, rm, rd, FCVT_D_L)) = {
+  if sizeof(xlen) == 64
+  then 
+  {
   let rs1_val_L = X(rs1);
   let rm_3b     = encdec_rounding_mode (select_instr_or_fcsr_rm  (rm));
 
   let (fflags, rd_val_D) = riscv_i64ToF64 (rm_3b, rs1_val_L);
 
   write_fflags(fflags);
-  F(rd) = rd_val_D;
+  if   ( sys_enable_zfinx() ) 
+  then X(rd) = rd_val_D
+  else F(rd) = rd_val_D;
   RETIRE_SUCCESS
+  }
+  else {
+  /* this would not decode on RV32 */
+  RETIRE_FAIL
+  }
 }
 
 function clause execute (F_UN_RM_TYPE_D(rs1, rm, rd, FCVT_D_LU)) = {
+  if sizeof(xlen) == 64
+  then 
+  {
   let rs1_val_LU = X(rs1);
   let rm_3b      = encdec_rounding_mode (select_instr_or_fcsr_rm  (rm));
 
   let (fflags, rd_val_D) = riscv_ui64ToF64 (rm_3b, rs1_val_LU);
 
   write_fflags(fflags);
-  F(rd) = rd_val_D;
+  if   ( sys_enable_zfinx() ) 
+  then X(rd) = rd_val_D
+  else F(rd) = rd_val_D;
   RETIRE_SUCCESS
+  }
+  else 
+  {
+  /* this would not decode on RV32 */
+  RETIRE_FAIL
+  }
 }
 
 /* AST -> Assembly notation ================================ */
@@ -641,41 +803,94 @@ mapping clause encdec = F_BIN_TYPE_D(rs2, rs1, rd, FLE_D)                 if is_
 /* Execution semantics ================================ */
 
 function clause execute (F_BIN_TYPE_D(rs2, rs1, rd, FSGNJ_D)) = {
-  let rs1_val_D    = F(rs1);
-  let rs2_val_D    = F(rs2);
+  if ((sys_enable_zfinx() & sizeof(xlen) == 32) & (rs1[0] == bitone | rs2[0] == bitone | rd[0] == bitone ) ) then {
+  handle_illegal();
+  RETIRE_FAIL
+  } else { 
+  let (rs1_val_D,rs2_val_D) : (bits(64),bits(64)) = match (sizeof(xlen),sys_enable_zfinx()) {
+  (64,true)  => (X(rs1),X(rs2)),
+  (32,true)  => (Xd(rs1),Xd(rs2)),
+  (_)   => (F(rs1),F(rs2))
+  };
   let (s1, e1, m1) = fsplit_D (rs1_val_D);
   let (s2, e2, m2) = fsplit_D (rs2_val_D);
   let rd_val_D     = fmake_D (s2, e1, m1);
 
-  F(rd) = rd_val_D;
+  if   ( sys_enable_zfinx() & (sizeof(xlen) == 32)& rd != 0b00000) then {
+      X(rd) = rd_val_D[31..0];
+      X(rd+1) = rd_val_D[63..32]}
+    else if (sys_enable_zfinx() & sizeof(xlen) == 64) then {
+      X(rd) = rd_val_D
+    }
+    else F(rd) = rd_val_D;
   RETIRE_SUCCESS
+  }
 }
 
 function clause execute (F_BIN_TYPE_D(rs2, rs1, rd, FSGNJN_D)) = {
-  let rs1_val_D    = F(rs1);
-  let rs2_val_D    = F(rs2);
+  if ((sys_enable_zfinx() & sizeof(xlen) == 32) & (rs1[0] == bitone | rs2[0] == bitone | rd[0] == bitone ) ) then {
+  handle_illegal();
+  RETIRE_FAIL
+  } else { 
+  let (rs1_val_D,rs2_val_D) : (bits(64),bits(64)) = match (sizeof(xlen),sys_enable_zfinx()) {
+  (64,true)  => (X(rs1),X(rs2)),
+  (32,true)  => (Xd(rs1),Xd(rs2)),
+  (_)   => (F(rs1),F(rs2))
+  };
   let (s1, e1, m1) = fsplit_D (rs1_val_D);
   let (s2, e2, m2) = fsplit_D (rs2_val_D);
   let rd_val_D     = fmake_D (0b1 ^ s2, e1, m1);
 
-  F(rd) = rd_val_D;
+  if   ( sys_enable_zfinx() & (sizeof(xlen) == 32)& rd != 0b00000) then {
+      X(rd) = rd_val_D[31..0];
+      X(rd+1) = rd_val_D[63..32]}
+    else if (sys_enable_zfinx() & sizeof(xlen) == 64) then {
+      X(rd) = rd_val_D
+    }
+    else F(rd) = rd_val_D;
+
   RETIRE_SUCCESS
-}
+  }
+  }
 
 function clause execute (F_BIN_TYPE_D(rs2, rs1, rd, FSGNJX_D)) = {
-  let rs1_val_D    = F(rs1);
-  let rs2_val_D    = F(rs2);
+  if ((sys_enable_zfinx() & sizeof(xlen) == 32) & (rs1[0] == bitone | rs2[0] == bitone | rd[0] == bitone ) ) then {
+  handle_illegal();
+  RETIRE_FAIL
+  } else { 
+  let (rs1_val_D,rs2_val_D) : (bits(64),bits(64)) = match (sizeof(xlen),sys_enable_zfinx()) {
+  (64,true)  => (X(rs1),X(rs2)),
+  (32,true)  => (Xd(rs1),Xd(rs2)),
+  (_)   => (F(rs1),F(rs2))
+  };
+
   let (s1, e1, m1) = fsplit_D (rs1_val_D);
   let (s2, e2, m2) = fsplit_D (rs2_val_D);
   let rd_val_D     = fmake_D (s1 ^ s2, e1, m1);
 
-  F(rd) = rd_val_D;
+
+if   ( sys_enable_zfinx() & (sizeof(xlen) == 32)& rd != 0b00000) then {
+    X(rd) = rd_val_D[31..0];
+    X(rd+1) = rd_val_D[63..32]}
+  else if (sys_enable_zfinx() & sizeof(xlen) == 64) then {
+    X(rd) = rd_val_D
+  }
+  else F(rd) = rd_val_D;
+
   RETIRE_SUCCESS
+}
 }
 
 function clause execute (F_BIN_TYPE_D(rs2, rs1, rd, FMIN_D)) = {
-  let rs1_val_D = F(rs1);
-  let rs2_val_D = F(rs2);
+  if ((sys_enable_zfinx() & sizeof(xlen) == 32) & (rs1[0] == bitone | rs2[0] == bitone | rd[0] == bitone ) ) then {
+  handle_illegal();
+  RETIRE_FAIL
+  } else { 
+  let (rs1_val_D,rs2_val_D) : (bits(64),bits(64)) = match (sizeof(xlen),sys_enable_zfinx()) {
+  (64,true)  => (X(rs1),X(rs2)),
+  (32,true)  => (Xd(rs1),Xd(rs2)),
+  (_)   => (F(rs1),F(rs2))
+  };
 
   let is_quiet  = true;
   let (rs1_lt_rs2, fflags) = fle_D (rs1_val_D, rs2_val_D, is_quiet);
@@ -689,13 +904,30 @@ function clause execute (F_BIN_TYPE_D(rs2, rs1, rd, FMIN_D)) = {
                   else /* (not rs1_lt_rs2) */                                            rs2_val_D;
 
   accrue_fflags(fflags);
-  F(rd) = rd_val_D;
+
+  if   ( sys_enable_zfinx() & (sizeof(xlen) == 32)& rd != 0b00000) then {
+      X(rd) = rd_val_D[31..0];
+      X(rd+1) = rd_val_D[63..32]}
+    else if (sys_enable_zfinx() & sizeof(xlen) == 64) then {
+      X(rd) = rd_val_D
+    }
+    else F(rd) = rd_val_D;
+
+
   RETIRE_SUCCESS
+}
 }
 
 function clause execute (F_BIN_TYPE_D(rs2, rs1, rd, FMAX_D)) = {
-  let rs1_val_D = F(rs1);
-  let rs2_val_D = F(rs2);
+if ((sys_enable_zfinx() & sizeof(xlen) == 32) & (rs1[0] == bitone | rs2[0] == bitone | rd[0] == bitone ) ) then {
+handle_illegal();
+RETIRE_FAIL
+} else { 
+let (rs1_val_D,rs2_val_D) : (bits(64),bits(64)) = match (sizeof(xlen),sys_enable_zfinx()) {
+(64,true)  => (X(rs1),X(rs2)),
+(32,true)  => (Xd(rs1),Xd(rs2)),
+(_)   => (F(rs1),F(rs2))
+};
 
   let is_quiet  = true;
   let (rs2_lt_rs1, fflags) = fle_D (rs2_val_D, rs1_val_D, is_quiet);
@@ -709,44 +941,96 @@ function clause execute (F_BIN_TYPE_D(rs2, rs1, rd, FMAX_D)) = {
                   else /* (not rs2_lt_rs1) */                                            rs2_val_D;
 
   accrue_fflags(fflags);
-  F(rd) = rd_val_D;
+
+if   ( sys_enable_zfinx() & (sizeof(xlen) == 32)& rd != 0b00000) then {
+    X(rd) = rd_val_D[31..0];
+    X(rd+1) = rd_val_D[63..32]}
+  else if (sys_enable_zfinx() & sizeof(xlen) == 64) then {
+    X(rd) = rd_val_D
+  }
+  else F(rd) = rd_val_D;
+  
   RETIRE_SUCCESS
+}
 }
 
 function clause execute (F_BIN_TYPE_D(rs2, rs1, rd, FEQ_D)) = {
-  let rs1_val_D = F(rs1);
-  let rs2_val_D = F(rs2);
+
+if ((sys_enable_zfinx() & sizeof(xlen) == 32) & (rs1[0] == bitone | rs2[0] == bitone | rd[0] == bitone ) ) then {
+handle_illegal();
+RETIRE_FAIL
+} else { 
+
+let (rs1_val_D,rs2_val_D) : (bits(64),bits(64)) = match (sizeof(xlen),sys_enable_zfinx()) {
+(64,true)  => (X(rs1),X(rs2)),
+(32,true)  => (Xd(rs1),Xd(rs2)),
+(_)   => (F(rs1),F(rs2))
+};
 
   let (fflags, rd_val) : (bits_fflags, bits_LU) =
       riscv_f64Eq (rs1_val_D, rs2_val_D);
 
   write_fflags(fflags);
-  X(rd) = rd_val;
+  if   (  (sizeof(xlen) == 32)& rd != 0b00000) then {
+      X(rd) = rd_val[31..0];
+      X(rd+1) = rd_val[63..32]}
+  else if (sizeof(xlen) == 64) then {
+      X(rd) = rd_val
+  };
   RETIRE_SUCCESS
+}
 }
 
 function clause execute (F_BIN_TYPE_D(rs2, rs1, rd, FLT_D)) = {
-  let rs1_val_D = F(rs1);
-  let rs2_val_D = F(rs2);
+  if ((sys_enable_zfinx() & sizeof(xlen) == 32) & (rs1[0] == bitone | rs2[0] == bitone | rd[0] == bitone ) ) then {
+  handle_illegal();
+  RETIRE_FAIL
+  } else { 
+  let (rs1_val_D,rs2_val_D) : (bits(64),bits(64)) = match (sizeof(xlen),sys_enable_zfinx()) {
+  (64,true)  => (X(rs1),X(rs2)),
+  (32,true)  => (Xd(rs1),Xd(rs2)),
+  (_)   => (F(rs1),F(rs2))
+  };
 
   let (fflags, rd_val) : (bits_fflags, bits_LU) =
       riscv_f64Lt (rs1_val_D, rs2_val_D);
 
   write_fflags(fflags);
-  X(rd) = rd_val;
+
+  if   (  (sizeof(xlen) == 32)& rd != 0b00000) then {
+      X(rd) = rd_val[31..0];
+      X(rd+1) = rd_val[63..32]}
+  else if (sizeof(xlen) == 64) then {
+      X(rd) = rd_val
+  };
+
   RETIRE_SUCCESS
+  }
 }
 
 function clause execute (F_BIN_TYPE_D(rs2, rs1, rd, FLE_D)) = {
-  let rs1_val_D = F(rs1);
-  let rs2_val_D = F(rs2);
-
+if ((sys_enable_zfinx() & sizeof(xlen) == 32) & (rs1[0] == bitone | rs2[0] == bitone | rd[0] == bitone ) ) then {
+handle_illegal();
+RETIRE_FAIL
+} else { 
+let (rs1_val_D,rs2_val_D) : (bits(64),bits(64)) = match (sizeof(xlen),sys_enable_zfinx()) {
+(64,true)  => (X(rs1),X(rs2)),
+(32,true)  => (Xd(rs1),Xd(rs2)),
+(_)   => (F(rs1),F(rs2))
+};
   let (fflags, rd_val) : (bits_fflags, bits_LU) =
       riscv_f64Le (rs1_val_D, rs2_val_D);
 
   write_fflags(fflags);
-  X(rd) = rd_val;
+
+  if   (  (sizeof(xlen) == 32) & rd != 0b00000) then {
+      X(rd) = rd_val[31..0];
+      X(rd+1) = rd_val[63..32]}
+  else if (sizeof(xlen) == 64) then {
+      X(rd) = rd_val
+  };
   RETIRE_SUCCESS
+}
 }
 
 /* AST -> Assembly notation ================================ */
@@ -831,7 +1115,14 @@ mapping clause encdec = F_UN_TYPE_D(rs1, rd, FMV_D_X)                         if
 /* Execution semantics ================================ */
 
 function clause execute (F_UN_TYPE_D(rs1, rd, FCLASS_D)) = {
-  let rs1_val_D = F(rs1);
+  if ((sys_enable_zfinx() & sizeof(xlen) == 32) & (rs1[0] == bitone | rd[0] == bitone ) ) then {
+  RETIRE_FAIL
+  } else { 
+  let rs1_val_D : bits(64) = match (sizeof(xlen),sys_enable_zfinx()) {
+  (64,true)  => X(rs1),
+  (32,true)  => Xd(rs1),
+  (_)   => F(rs1)
+  };
 
   let rd_val_10b : bits (10) =
     if      f_is_neg_inf_D     (rs1_val_D) then 0b_00_0000_0001
@@ -849,22 +1140,39 @@ function clause execute (F_UN_TYPE_D(rs1, rd, FCLASS_D)) = {
   X(rd) = EXTZ (rd_val_10b);
   RETIRE_SUCCESS
 }
+}
 
 function clause execute (F_UN_TYPE_D(rs1, rd, FMV_X_D)) = {
-  let rs1_val_D = F(rs1);
+  if   sizeof(xlen) == 64
+  then {
+  let rs1_val_D = (if (sys_enable_zfinx()) then X(rs1) else F(rs1));
   let rd_val_X  = rs1_val_D;
   X(rd)         = rd_val_X;
   RETIRE_SUCCESS
+  }
+  else{
+  /* this would not decode on RV32 */
+  RETIRE_FAIL
+  }
 }
 
 function clause execute (F_UN_TYPE_D(rs1, rd, FMV_D_X)) = {
+  if   sizeof(xlen) == 64
+  then {
   let rs1_val_X = X(rs1);
   let rd_val_D  = rs1_val_X;
-  F(rd)         = rd_val_D;
+  if   ( sys_enable_zfinx() ) 
+  then X(rd) = rd_val_D
+  else F(rd) = rd_val_D;
   RETIRE_SUCCESS
+  }
+  else{
+  /* this would not decode on RV32 */
+  RETIRE_FAIL
+  }
 }
 
-/* AST -> Assembly notation ================================ */
+// /* AST -> Assembly notation ================================ */
 
 mapping f_un_type_mnemonic_D : f_un_op_D <-> string = {
     FMV_X_D  <-> "fmv.x.d",

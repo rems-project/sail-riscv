@@ -1,3 +1,4 @@
+/* ZFinX extension introduced by IAK @ Huawei Technologies Research & Development (Uk) Limited, November 2020*/ 
 /* Machine-mode and supervisor-mode functionality. */
 
 
@@ -470,8 +471,8 @@ function init_sys() -> unit = {
    * On RV32, we currently only support F.
    */
   misa->F()   = bool_to_bits(sys_enable_fdext());      /* single-precision */
-  misa->D()   = if   sizeof(xlen) == 64
-                then bool_to_bits(sys_enable_fdext())  /* double-precision */
+  misa->D()   = if   (sizeof(flen) == 64) | (sys_enable_zfinx() & sizeof(xlen) == 64) /*double-precision */
+                then bool_to_bits(sys_enable_fdext())  
                 else 0b0;
 
   mstatus = set_mstatus_SXL(mstatus, misa.MXL());

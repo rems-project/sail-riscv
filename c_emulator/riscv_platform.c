@@ -1,3 +1,5 @@
+/* ZFinX extension introduced by IAK @ Huawei Technologies Research & Development (Uk) Limited, November 2020*/ 
+
 #include "sail.h"
 #include "rts.h"
 #include "riscv_prelude.h"
@@ -15,6 +17,9 @@ bool sys_enable_rvc(unit u)
 bool sys_enable_fdext(unit u)
 { return rv_enable_fdext; }
 
+bool sys_enable_zfinx(unit u)
+{ return rv_enable_zfinx; }
+
 bool sys_enable_writable_misa(unit u)
 { return rv_enable_writable_misa; }
 
@@ -29,6 +34,8 @@ bool plat_mtval_has_illegal_inst_bits(unit u)
 
 bool plat_enable_pmp(unit u)
 { return rv_enable_pmp; }
+
+
 
 mach_bits plat_ram_base(unit u)
 { return rv_ram_base; }

@@ -1,3 +1,4 @@
+/* ZFinX extension introduced by IAK @ Huawei Technologies Research & Development (Uk) Limited, November 2020*/ 
 #include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -117,6 +118,7 @@ static struct option options[] = {
   {"trace",                       optional_argument, 0, 'v'},
   {"no-trace",                    optional_argument, 0, 'V'},
   {"inst-limit",                  required_argument, 0, 'l'},
+  {"enable-zfinx",                no_argument,       0, 'x'},
   {0, 0, 0, 0}
 };
 
@@ -219,6 +221,7 @@ char *process_args(int argc, char **argv)
                     "v::"
                     "l:"
                     "F:"
+                    "x"
                          , options, NULL);
     if (c == -1) break;
     switch (c) {
@@ -300,6 +303,10 @@ char *process_args(int argc, char **argv)
       break;
     case 'l':
       insn_limit = atoi(optarg);
+      break;
+    case 'x':
+      fprintf(stderr, "enabling Zfinx support.\n");
+      rv_enable_zfinx = true;
       break;
     case '?':
       print_usage(argv[0], 1);

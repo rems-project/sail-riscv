@@ -5,7 +5,8 @@
 /* RISC-V follows IEEE 754-2008 floating point arithmetic standard. */
 
 /* Original version written by Rishiyur S. Nikhil, Sept-Oct 2019    */
-
+/* ZFinX extension introduced by IAK @ Huawei                       */
+/*   Technologies Research & Development (Uk) Limited, November 2020*/
 /* **************************************************************** */
 /* IMPORTANT!                                                       */
 /* The files 'riscv_insts_fext.sail' and 'riscv_insts_dext.sail'    */
@@ -257,10 +258,29 @@ function nan_box   val_32b =
   then val_32b
   else 0x_FFFF_FFFF @ val_32b
 
+val      x_nan_box : bits(32) -> xlenbits
+function x_nan_box   val_32b =
+  if (sizeof(xlen) == 32)
+  then val_32b
+  else 0x_FFFF_FFFF @ val_32b
+
 val      nan_unbox : flenbits -> bits(32)
 function nan_unbox   regval =
   if (sizeof(flen) == 32)
   then regval
+  else if (sys_enable_zfinx())   /* ZFINX does nan boxing, but does not check for it */
+  then  regval [31..0]
+  else if regval [63..32] == 0x_FFFF_FFFF
+       then regval [31..0]
+       else canonical_NaN_S()
+
+
+val      x_nan_unbox : xlenbits-> bits(32)
+function x_nan_unbox   regval =
+  if (sizeof(xlen) == 32)
+  then regval
+  else if (sys_enable_zfinx())   /* ZFINX does nan boxing, but does not check for it */
+  then  regval [31..0]
   else if regval [63..32] == 0x_FFFF_FFFF
        then regval [31..0]
        else canonical_NaN_S()
@@ -328,7 +348,7 @@ function clause execute(LOAD_FP(imm, rs1, rd, width)) = {
         TR_Failure(e, _) => { handle_mem_exception(vaddr, e); RETIRE_FAIL },
         TR_Address(addr, _) => {
           let (aq, rl, res) = (false, false, false);
-          match (width, sizeof(xlen)) {
+          match (width, sizeof(flen)) {
             (BYTE, _)   => { handle_illegal(); RETIRE_FAIL },
             (HALF, _)   => { handle_illegal(); RETIRE_FAIL },
             (WORD, _)   =>
@@ -340,6 +360,7 @@ function clause execute(LOAD_FP(imm, rs1, rd, width)) = {
       }
   }
 }
+
 
 /* AST -> Assembly notation ================================ */
 
@@ -398,7 +419,7 @@ function clause execute (STORE_FP(imm, rs2, rs1, width)) = {
             MemException(e) => { handle_mem_exception(addr, e); RETIRE_FAIL },
             MemValue(_) => {
               let rs2_val = F(rs2);
-              match (width, sizeof(xlen)) {
+              match (width, sizeof(flen)) {
                 (BYTE, _)    => { handle_illegal(); RETIRE_FAIL },
                 (HALF, _)    => { handle_illegal(); RETIRE_FAIL },
                 (WORD, _)    => process_fstore (vaddr, mem_write_value(addr, 4, rs2_val[31..0], aq, rl, con)),
@@ -447,9 +468,11 @@ mapping clause encdec =
 /* Execution semantics ================================ */
 
 function clause execute (F_MADD_TYPE_S(rs3, rs2, rs1, rm, rd, op)) = {
-  let rs1_val_32b = nan_unbox (F(rs1));
-  let rs2_val_32b = nan_unbox (F(rs2));
-  let rs3_val_32b = nan_unbox (F(rs3));
+
+  let rs1_val_32b = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs1)) else nan_unbox(F(rs1));
+  let rs2_val_32b = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs2)) else nan_unbox(F(rs2));
+  let rs3_val_32b = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs3)) else nan_unbox(F(rs3));
+  
   let rm_3b       = encdec_rounding_mode (select_instr_or_fcsr_rm  (rm));
   let (fflags, rd_val_32b) : (bits(5), bits(32)) =
     match op {
@@ -459,7 +482,14 @@ function clause execute (F_MADD_TYPE_S(rs3, rs2, rs1, rm, rd, op)) = {
       FNMADD_S => riscv_f32MulAdd (rm_3b, negate_S (rs1_val_32b), rs2_val_32b, negate_S (rs3_val_32b))
     };
   write_fflags(fflags);
-  F(rd) = nan_box (rd_val_32b);
+
+  if   ( sys_enable_zfinx() & sizeof(xlen) == 64 )
+  then X(rd) = x_nan_box (rd_val_32b)
+  else if ( sys_enable_zfinx() & sizeof(xlen) == 32 )
+  then X(rd) = rd_val_32b
+  else F(rd) = nan_box (rd_val_32b);
+
+
   RETIRE_SUCCESS
 }
 
@@ -508,8 +538,10 @@ mapping clause encdec =
 /* Execution semantics ================================ */
 
 function clause execute (F_BIN_RM_TYPE_S(rs2, rs1, rm, rd, op)) = {
-  let rs1_val_32b = nan_unbox (F(rs1));
-  let rs2_val_32b = nan_unbox (F(rs2));
+  
+  let rs1_val_32b = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs1)) else nan_unbox(F(rs1));
+  let rs2_val_32b = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs2)) else nan_unbox(F(rs2));
+           
   let rm_3b       = encdec_rounding_mode (select_instr_or_fcsr_rm  (rm));
   let (fflags, rd_val_32b) : (bits(5), bits(32)) = match op {
     FADD_S  => riscv_f32Add (rm_3b, rs1_val_32b, rs2_val_32b),
@@ -518,7 +550,14 @@ function clause execute (F_BIN_RM_TYPE_S(rs2, rs1, rm, rd, op)) = {
     FDIV_S  => riscv_f32Div (rm_3b, rs1_val_32b, rs2_val_32b)
   };
   write_fflags(fflags);
-  F(rd) = nan_box (rd_val_32b);
+  
+
+  if   ( sys_enable_zfinx() & sizeof(xlen) == 64 )
+  then X(rd) = x_nan_box (rd_val_32b)
+  else if ( sys_enable_zfinx() & sizeof(xlen) == 32 )
+  then X(rd) = rd_val_32b
+  else F(rd) = nan_box (rd_val_32b);
+
   RETIRE_SUCCESS
 }
 
@@ -588,18 +627,23 @@ mapping clause encdec =
 /* Execution semantics ================================ */
 
 function clause execute (F_UN_RM_TYPE_S(rs1, rm, rd, FSQRT_S)) = {
-  let rs1_val_S = nan_unbox (F(rs1));
+  let rs1_val_S = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs1)) else nan_unbox(F(rs1));
   let rm_3b     = encdec_rounding_mode (select_instr_or_fcsr_rm  (rm));
 
   let (fflags, rd_val_S) = riscv_f32Sqrt   (rm_3b, rs1_val_S);
 
   write_fflags(fflags);
-  F(rd) = nan_box (rd_val_S);
+
+  if   ( sys_enable_zfinx() & sizeof(xlen) == 64 )
+  then X(rd) = x_nan_box (rd_val_S)
+  else if ( sys_enable_zfinx() & sizeof(xlen) == 32 )
+  then X(rd) = rd_val_S
+  else F(rd) = nan_box (rd_val_S);
   RETIRE_SUCCESS
 }
 
 function clause execute (F_UN_RM_TYPE_S(rs1, rm, rd, FCVT_W_S)) = {
-  let rs1_val_S = nan_unbox (F(rs1));
+  let rs1_val_S = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs1)) else nan_unbox(F(rs1));
   let rm_3b     = encdec_rounding_mode (select_instr_or_fcsr_rm  (rm));
 
   let (fflags, rd_val_W) = riscv_f32ToI32 (rm_3b, rs1_val_S);
@@ -610,7 +654,7 @@ function clause execute (F_UN_RM_TYPE_S(rs1, rm, rd, FCVT_W_S)) = {
 }
 
 function clause execute (F_UN_RM_TYPE_S(rs1, rm, rd, FCVT_WU_S)) = {
-  let rs1_val_S = nan_unbox (F(rs1));
+  let rs1_val_S = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs1)) else nan_unbox(F(rs1));
   let rm_3b     = encdec_rounding_mode (select_instr_or_fcsr_rm  (rm));
 
   let (fflags, rd_val_WU) = riscv_f32ToUi32 (rm_3b, rs1_val_S);
@@ -627,7 +671,12 @@ function clause execute (F_UN_RM_TYPE_S(rs1, rm, rd, FCVT_S_W)) = {
   let (fflags, rd_val_S) = riscv_i32ToF32 (rm_3b, rs1_val_W);
 
   write_fflags(fflags);
-  F(rd) = nan_box (rd_val_S);
+
+  if   ( sys_enable_zfinx() & sizeof(xlen) == 64 )
+  then X(rd) = x_nan_box (rd_val_S)
+  else if ( sys_enable_zfinx() & sizeof(xlen) == 32 )
+  then X(rd) = rd_val_S
+  else F(rd) = nan_box (rd_val_S);
   RETIRE_SUCCESS
 }
 
@@ -638,14 +687,19 @@ function clause execute (F_UN_RM_TYPE_S(rs1, rm, rd, FCVT_S_WU)) = {
   let (fflags, rd_val_S) = riscv_ui32ToF32 (rm_3b, rs1_val_WU);
 
   write_fflags(fflags);
-  F(rd) = nan_box (rd_val_S);
+
+  if   ( sys_enable_zfinx() & sizeof(xlen) == 64 )
+  then X(rd) = x_nan_box (rd_val_S)
+  else if ( sys_enable_zfinx() & sizeof(xlen) == 32 )
+  then X(rd) = rd_val_S
+  else F(rd) = nan_box (rd_val_S);
   RETIRE_SUCCESS
 }
 
 function clause execute (F_UN_RM_TYPE_S(rs1, rm, rd, FCVT_L_S)) = {
-  if   sizeof(flen) == 64
+  if   sizeof(xlen) == 64
   then {
-    let rs1_val_S = nan_unbox (F(rs1));
+    let rs1_val_S = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs1)) else nan_unbox(F(rs1));
     let rm_3b     = encdec_rounding_mode (select_instr_or_fcsr_rm  (rm));
 
     let (fflags, rd_val_L) = riscv_f32ToI64 (rm_3b, rs1_val_S);
@@ -660,9 +714,9 @@ function clause execute (F_UN_RM_TYPE_S(rs1, rm, rd, FCVT_L_S)) = {
 }
 
 function clause execute (F_UN_RM_TYPE_S(rs1, rm, rd, FCVT_LU_S)) = {
-  if   sizeof(flen) == 64
+  if   sizeof(xlen) == 64
   then {
-    let rs1_val_S = nan_unbox (F(rs1));
+    let rs1_val_S = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs1)) else nan_unbox(F(rs1));
     let rm_3b     = encdec_rounding_mode (select_instr_or_fcsr_rm  (rm));
 
     let (fflags, rd_val_LU) = riscv_f32ToUi64 (rm_3b, rs1_val_S);
@@ -677,7 +731,7 @@ function clause execute (F_UN_RM_TYPE_S(rs1, rm, rd, FCVT_LU_S)) = {
 }
 
 function clause execute (F_UN_RM_TYPE_S(rs1, rm, rd, FCVT_S_L)) = {
-  if   sizeof(flen) == 64
+  if   sizeof(xlen) == 64
   then {
     let rs1_val_L = X(rs1);
     let rm_3b     = encdec_rounding_mode (select_instr_or_fcsr_rm  (rm));
@@ -685,7 +739,9 @@ function clause execute (F_UN_RM_TYPE_S(rs1, rm, rd, FCVT_S_L)) = {
     let (fflags, rd_val_S) = riscv_i64ToF32 (rm_3b, rs1_val_L);
 
     write_fflags(fflags);
-    F(rd) = nan_box (rd_val_S);
+    if   ( sys_enable_zfinx() )
+    then X(rd) = x_nan_box (rd_val_S)
+    else F(rd) = nan_box (rd_val_S);
     RETIRE_SUCCESS
   } else {
     /* this would not decode on RV32 */
@@ -694,7 +750,7 @@ function clause execute (F_UN_RM_TYPE_S(rs1, rm, rd, FCVT_S_L)) = {
 }
 
 function clause execute (F_UN_RM_TYPE_S(rs1, rm, rd, FCVT_S_LU)) = {
-  if   sizeof(flen) == 64
+  if   sizeof(xlen) == 64
   then {
     let rs1_val_LU = X(rs1);
     let rm_3b      = encdec_rounding_mode (select_instr_or_fcsr_rm  (rm));
@@ -702,7 +758,10 @@ function clause execute (F_UN_RM_TYPE_S(rs1, rm, rd, FCVT_S_LU)) = {
     let (fflags, rd_val_S) = riscv_ui64ToF32 (rm_3b, rs1_val_LU);
 
     write_fflags(fflags);
-    F(rd) = nan_box (rd_val_S);
+    
+    if   ( sys_enable_zfinx() )
+    then X(rd) = x_nan_box (rd_val_S)
+    else F(rd) = nan_box (rd_val_S);
     RETIRE_SUCCESS
   } else {
     /* this would not decode on RV32 */
@@ -816,41 +875,53 @@ mapping clause encdec = F_BIN_TYPE_S(rs2, rs1, rd, FLE_S)                 if is_
 /* Execution semantics ================================ */
 
 function clause execute (F_BIN_TYPE_S(rs2, rs1, rd, FSGNJ_S)) = {
-  let rs1_val_S    = nan_unbox (F(rs1));
-  let rs2_val_S    = nan_unbox (F(rs2));
+  let rs1_val_S = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs1)) else nan_unbox(F(rs1));
+  let rs2_val_S = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs2)) else nan_unbox(F(rs2));
   let (s1, e1, m1) = fsplit_S (rs1_val_S);
   let (s2, e2, m2) = fsplit_S (rs2_val_S);
   let rd_val_S     = fmake_S (s2, e1, m1);
 
-  F(rd) = nan_box (rd_val_S);
+  if   ( sys_enable_zfinx() & sizeof(xlen) == 64 )
+  then X(rd) = x_nan_box (rd_val_S)
+  else if ( sys_enable_zfinx() & sizeof(xlen) == 32 )
+  then X(rd) = rd_val_S
+  else F(rd) = nan_box (rd_val_S);
   RETIRE_SUCCESS
 }
 
 function clause execute (F_BIN_TYPE_S(rs2, rs1, rd, FSGNJN_S)) = {
-  let rs1_val_S    = nan_unbox (F(rs1));
-  let rs2_val_S    = nan_unbox (F(rs2));
+  let rs1_val_S = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs1)) else nan_unbox(F(rs1));
+  let rs2_val_S = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs2)) else nan_unbox(F(rs2));
   let (s1, e1, m1) = fsplit_S (rs1_val_S);
   let (s2, e2, m2) = fsplit_S (rs2_val_S);
   let rd_val_S     = fmake_S (0b1 ^ s2, e1, m1);
 
-  F(rd) = nan_box (rd_val_S);
+  if   ( sys_enable_zfinx() & sizeof(xlen) == 64 )
+  then X(rd) = x_nan_box (rd_val_S)
+  else if ( sys_enable_zfinx() & sizeof(xlen) == 32 )
+  then X(rd) = rd_val_S
+  else F(rd) = nan_box (rd_val_S);
   RETIRE_SUCCESS
 }
 
 function clause execute (F_BIN_TYPE_S(rs2, rs1, rd, FSGNJX_S)) = {
-  let rs1_val_S    = nan_unbox (F(rs1));
-  let rs2_val_S    = nan_unbox (F(rs2));
+  let rs1_val_S = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs1)) else nan_unbox(F(rs1));
+  let rs2_val_S = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs2)) else nan_unbox(F(rs2));
   let (s1, e1, m1) = fsplit_S (rs1_val_S);
   let (s2, e2, m2) = fsplit_S (rs2_val_S);
   let rd_val_S     = fmake_S (s1 ^ s2, e1, m1);
 
-  F(rd) = nan_box (rd_val_S);
+  if   ( sys_enable_zfinx() & sizeof(xlen) == 64 )
+  then X(rd) = x_nan_box (rd_val_S)
+  else if ( sys_enable_zfinx() & sizeof(xlen) == 32 )
+  then X(rd) = rd_val_S
+  else F(rd) = nan_box (rd_val_S);
   RETIRE_SUCCESS
 }
 
 function clause execute (F_BIN_TYPE_S(rs2, rs1, rd, FMIN_S)) = {
-  let rs1_val_S = nan_unbox (F(rs1));
-  let rs2_val_S = nan_unbox (F(rs2));
+  let rs1_val_S = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs1)) else nan_unbox(F(rs1));
+  let rs2_val_S = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs2)) else nan_unbox(F(rs2));
 
   let is_quiet  = true;
   let (rs1_lt_rs2, fflags) = fle_S (rs1_val_S, rs2_val_S, is_quiet);
@@ -864,13 +935,17 @@ function clause execute (F_BIN_TYPE_S(rs2, rs1, rd, FMIN_S)) = {
                   else /* (not rs1_lt_rs2) */                                            rs2_val_S;
 
   accrue_fflags(fflags);
-  F(rd) = nan_box (rd_val_S);
+  if   ( sys_enable_zfinx() & sizeof(xlen) == 64 )
+  then X(rd) = x_nan_box (rd_val_S)
+  else if ( sys_enable_zfinx() & sizeof(xlen) == 32 )
+  then X(rd) = rd_val_S
+  else F(rd) = nan_box (rd_val_S);
   RETIRE_SUCCESS
 }
 
 function clause execute (F_BIN_TYPE_S(rs2, rs1, rd, FMAX_S)) = {
-  let rs1_val_S = nan_unbox (F(rs1));
-  let rs2_val_S = nan_unbox (F(rs2));
+  let rs1_val_S = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs1)) else nan_unbox(F(rs1));
+  let rs2_val_S = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs2)) else nan_unbox(F(rs2));
 
   let is_quiet  = true;
   let (rs2_lt_rs1, fflags) = fle_S (rs2_val_S, rs1_val_S, is_quiet);
@@ -884,13 +959,17 @@ function clause execute (F_BIN_TYPE_S(rs2, rs1, rd, FMAX_S)) = {
                   else /* (not rs2_lt_rs1) */                                            rs2_val_S;
 
   accrue_fflags(fflags);
-  F(rd) = nan_box (rd_val_S);
+  if   ( sys_enable_zfinx() & sizeof(xlen) == 64 )
+  then X(rd) = x_nan_box (rd_val_S)
+  else if ( sys_enable_zfinx() & sizeof(xlen) == 32 )
+  then X(rd) = rd_val_S
+  else F(rd) = nan_box (rd_val_S);
   RETIRE_SUCCESS
 }
 
 function clause execute (F_BIN_TYPE_S(rs2, rs1, rd, FEQ_S)) = {
-  let rs1_val_S = nan_unbox (F(rs1));
-  let rs2_val_S = nan_unbox (F(rs2));
+  let rs1_val_S = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs1)) else nan_unbox(F(rs1));
+  let rs2_val_S = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs2)) else nan_unbox(F(rs2));
 
   let (fflags, rd_val) : (bits_fflags, bits_WU) =
       riscv_f32Eq (rs1_val_S, rs2_val_S);
@@ -901,8 +980,8 @@ function clause execute (F_BIN_TYPE_S(rs2, rs1, rd, FEQ_S)) = {
 }
 
 function clause execute (F_BIN_TYPE_S(rs2, rs1, rd, FLT_S)) = {
-  let rs1_val_S = nan_unbox (F(rs1));
-  let rs2_val_S = nan_unbox (F(rs2));
+  let rs1_val_S = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs1)) else nan_unbox(F(rs1));
+  let rs2_val_S = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs2)) else nan_unbox(F(rs2));
 
   let (fflags, rd_val) : (bits_fflags, bits_WU) =
       riscv_f32Lt (rs1_val_S, rs2_val_S);
@@ -913,8 +992,8 @@ function clause execute (F_BIN_TYPE_S(rs2, rs1, rd, FLT_S)) = {
 }
 
 function clause execute (F_BIN_TYPE_S(rs2, rs1, rd, FLE_S)) = {
-  let rs1_val_S = nan_unbox (F(rs1));
-  let rs2_val_S = nan_unbox (F(rs2));
+  let rs1_val_S = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs1)) else nan_unbox(F(rs1));
+  let rs2_val_S = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs2)) else nan_unbox(F(rs2));
 
   let (fflags, rd_val) : (bits_fflags, bits_WU) =
       riscv_f32Le (rs1_val_S, rs2_val_S);
@@ -1004,7 +1083,7 @@ mapping clause encdec = F_UN_TYPE_S(rs1, rd, FMV_W_X)                         if
 /* Execution semantics ================================ */
 
 function clause execute (F_UN_TYPE_S(rs1, rd, FCLASS_S)) = {
-  let rs1_val_S = nan_unbox (F(rs1));
+  let rs1_val_S = if (sys_enable_zfinx()) then  x_nan_unbox (X(rs1)) else nan_unbox(F(rs1));
 
   let rd_val_10b : bits (10) =
     if      f_is_neg_inf_S     (rs1_val_S) then 0b_00_0000_0001
@@ -1024,7 +1103,7 @@ function clause execute (F_UN_TYPE_S(rs1, rd, FCLASS_S)) = {
 }
 
 function clause execute (F_UN_TYPE_S(rs1, rd, FMV_X_W)) = {
-  let rs1_val_S            = F(rs1)[31..0];
+  let rs1_val_S            = ( if (sys_enable_zfinx()) then X(rs1)[31..0] else F(rs1)[31..0]);
   let rd_val_X  : xlenbits = EXTS(rs1_val_S);
   X(rd) = rd_val_X;
   RETIRE_SUCCESS
@@ -1033,11 +1112,16 @@ function clause execute (F_UN_TYPE_S(rs1, rd, FMV_X_W)) = {
 function clause execute (F_UN_TYPE_S(rs1, rd, FMV_W_X)) = {
   let rs1_val_X            = X(rs1);
   let rd_val_S             = rs1_val_X [31..0];
-  F(rd) = nan_box (rd_val_S);
+
+  if   ( sys_enable_zfinx() & sizeof(xlen) == 64 )
+  then X(rd) = x_nan_box (rd_val_S)
+  else if ( sys_enable_zfinx() & sizeof(xlen) == 32 )
+  then X(rd) = rd_val_S
+  else F(rd) = nan_box (rd_val_S);
   RETIRE_SUCCESS
 }
 
-/* AST -> Assembly notation ================================ */
+// /* AST -> Assembly notation ================================ */
 
 mapping f_un_type_mnemonic_S : f_un_op_S <-> string = {
     FMV_X_W  <-> "fmv.x.w",

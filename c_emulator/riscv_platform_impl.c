@@ -1,9 +1,11 @@
+/* ZFinX extension introduced by IAK @ Huawei Technologies Research & Development (Uk) Limited, November 2020*/ 
 #include "riscv_platform_impl.h"
 #include <unistd.h>
 #include <stdio.h>
 
 /* Settings of the platform implementation, with common defaults. */
 bool rv_enable_pmp                  = false;
+bool rv_enable_zfinx                = false;
 bool rv_enable_rvc                  = true;
 bool rv_enable_writable_misa        = true;
 bool rv_enable_fdext                = true;
