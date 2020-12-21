@@ -247,8 +247,8 @@ function in32BitMode() -> bool = {
 }
 
 /* F and D extensions have to enabled both via misa.{FD} as well as mstatus.FS */
-function haveFExt()    -> bool = (misa.F() == 0b1) & (mstatus.FS() != 0b00)
-function haveDExt()    -> bool = (misa.D() == 0b1) & (mstatus.FS() != 0b00)
+function haveFExt()    -> bool = (misa.F() == 0b1) & (mstatus.FS() != 0b00 | sys_enable_zfinx() == true)
+function haveDExt()    -> bool = (misa.D() == 0b1) & (mstatus.FS() != 0b00 | sys_enable_zfinx() == true)
 
 /* interrupt processing state */
 

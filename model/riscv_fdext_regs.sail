@@ -187,40 +187,72 @@ overload to_str = {freg_name_abi}
 
 /* mappings for assembly */
 
-val freg_name : bits(5) <-> string
+val freg_name : bits(6) <-> string
 mapping freg_name = {
-    0b00000 <-> "ft0",
-    0b00001 <-> "ft1",
-    0b00010 <-> "ft2",
-    0b00011 <-> "ft3",
-    0b00100 <-> "ft4",
-    0b00101 <-> "ft5",
-    0b00110 <-> "ft6",
-    0b00111 <-> "ft7",
-    0b01000 <-> "fs0",
-    0b01001 <-> "fs1",
-    0b01010 <-> "fa0",
-    0b01011 <-> "fa1",
-    0b01100 <-> "fa2",
-    0b01101 <-> "fa3",
-    0b01110 <-> "fa4",
-    0b01111 <-> "fa5",
-    0b10000 <-> "fa6",
-    0b10001 <-> "fa7",
-    0b10010 <-> "fs2",
-    0b10011 <-> "fs3",
-    0b10100 <-> "fs4",
-    0b10101 <-> "fs5",
-    0b10110 <-> "fs6",
-    0b10111 <-> "fs7",
-    0b11000 <-> "fs8",
-    0b11001 <-> "fs9",
-    0b11010 <-> "fs10",
-    0b11011 <-> "fs11",
-    0b11100 <-> "ft8",
-    0b11101 <-> "ft9",
-    0b11110 <-> "ft10",
-    0b11111 <-> "ft11"
+    0b000000 <-> "ft0",
+    0b000001 <-> "ft1",
+    0b000010 <-> "ft2",
+    0b000011 <-> "ft3",
+    0b000100 <-> "ft4",
+    0b000101 <-> "ft5",
+    0b000110 <-> "ft6",
+    0b000111 <-> "ft7",
+    0b001000 <-> "fs0",
+    0b001001 <-> "fs1",
+    0b001010 <-> "fa0",
+    0b001011 <-> "fa1",
+    0b001100 <-> "fa2",
+    0b001101 <-> "fa3",
+    0b001110 <-> "fa4",
+    0b001111 <-> "fa5",
+    0b010000 <-> "fa6",
+    0b010001 <-> "fa7",
+    0b010010 <-> "fs2",
+    0b010011 <-> "fs3",
+    0b010100 <-> "fs4",
+    0b010101 <-> "fs5",
+    0b010110 <-> "fs6",
+    0b010111 <-> "fs7",
+    0b011000 <-> "fs8",
+    0b011001 <-> "fs9",
+    0b011010 <-> "fs10",
+    0b011011 <-> "fs11",
+    0b011100 <-> "ft8",
+    0b011101 <-> "ft9",
+    0b011110 <-> "ft10",
+    0b011111 <-> "ft11",
+    0b100000 <-> "zero",
+    0b100001 <-> "ra",
+    0b100010 <-> "sp",
+    0b100011 <-> "gp",
+    0b100100 <-> "tp",
+    0b100101 <-> "t0",
+    0b100110 <-> "t1",
+    0b100111 <-> "t2",
+    0b101000 <-> "fp",
+    0b101001 <-> "s1",
+    0b101010 <-> "a0",
+    0b101011 <-> "a1",
+    0b101100 <-> "a2",
+    0b101101 <-> "a3",
+    0b101110 <-> "a4",
+    0b101111 <-> "a5",
+    0b110000 <-> "a6",
+    0b110001 <-> "a7",
+    0b110010 <-> "s2",
+    0b110011 <-> "s3",
+    0b110100 <-> "s4",
+    0b110101 <-> "s5",
+    0b110110 <-> "s6",
+    0b110111 <-> "s7",
+    0b111000 <-> "s8",
+    0b111001 <-> "s9",
+    0b111010 <-> "s10",
+    0b111011 <-> "s11",
+    0b111100 <-> "t3",
+    0b111101 <-> "t4",
+    0b111110 <-> "t5",
+    0b111111 <-> "t6"
 }
 
 val init_fdext_regs : unit -> unit effect {wreg}
@@ -278,13 +310,13 @@ function ext_write_fcsr (frm, fflags) = {
   fcsr->FRM()    = frm;      /* Note: frm can be an illegal value, 101, 110, 111 */
   fcsr->FFLAGS() = fflags;
   update_softfloat_fflags(fflags);
-  dirty_fd_context();
+  if (sys_enable_zfinx()==false)  then dirty_fd_context();
 }
 
 /* called for softfloat paths (softfloat flags are consistent) */
 val write_fflags : (bits(5)) -> unit effect {rreg, wreg}
 function write_fflags(fflags) = {
-  if   fcsr.FFLAGS() != fflags
+  if   (fcsr.FFLAGS() != fflags & sys_enable_zfinx() == false)
   then dirty_fd_context();
   fcsr->FFLAGS() = fflags;
 }
@@ -297,6 +329,6 @@ function accrue_fflags(flags) = {
   then {
     fcsr->FFLAGS() = f;
     update_softfloat_fflags(f);
-    dirty_fd_context();
+    if (sys_enable_zfinx()==false)  then dirty_fd_context();
   }
 }

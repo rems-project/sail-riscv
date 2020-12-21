@@ -307,6 +307,7 @@ char *process_args(int argc, char **argv)
     case 'x':
       fprintf(stderr, "enabling Zfinx support.\n");
       rv_enable_zfinx = true;
+      zzzfinx_en = 1;
       break;
     case '?':
       print_usage(argv[0], 1);

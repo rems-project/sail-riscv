@@ -32,6 +32,7 @@ void zrvfi_get_exec_packet(sail_bits *rop, unit);
 #endif
 
 extern mach_bits zxlen_val;
+extern int64_t zzzfinx_en;
 extern bool zhtif_done;
 extern mach_bits zhtif_exit_code;
 extern bool have_exception;
