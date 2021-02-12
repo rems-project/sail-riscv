@@ -1,28 +1,44 @@
-# Select architecture: RV32 or RV64.
-ARCH ?= RV64
-
-ifeq ($(ARCH),32)
-  override ARCH := RV32
-else ifeq ($(ARCH),64)
-  override ARCH := RV64
+# Select architecture
+ifeq ($(ARCH),RV32)
+  override XLEN := 32
+  override FLEN := 32
+else ifeq ($(ARCH),RV64)
+  override XLEN := 64
+  override FLEN := 64
+else ifneq ($(and $(XLEN),$(FLEN)),)
+else ifndef $(ARCH)
+  override XLEN := 64
+  override FLEN := 64
+else 
+  $(error 'No valid architecture detected')
 endif
 
-# Currently, we only have F with RV32, and both F and D with RV64.
-ifeq ($(ARCH),RV32)
+
+ifeq ($(XLEN),32)
   SAIL_XLEN := riscv_xlen32.sail
-  SAIL_FLEN := riscv_flen_F.sail
-else ifeq ($(ARCH),RV64)
+  override ARCH := RV32
+else ifeq ($(XLEN),64)
   SAIL_XLEN := riscv_xlen64.sail
+  override ARCH := RV64
+else
+  $(error 'XLEN used is not currently supported, it must be either 64 or 32')
+endif
+
+ifeq ($(FLEN),32)
+  SAIL_FLEN := riscv_flen_F.sail
+else ifeq ($(FLEN),64)
   SAIL_FLEN := riscv_flen_D.sail
 else
-  $(error '$(ARCH)' is not a valid architecture, must be one of: RV32, RV64)
+  $(error 'FLEN used is not currently supported, it must be either 64 or 32')
 endif
+
+
 
 # Instruction sources, depending on target
 SAIL_CHECK_SRCS = riscv_addr_checks_common.sail riscv_addr_checks.sail riscv_misa_ext.sail
 SAIL_DEFAULT_INST = riscv_insts_base.sail riscv_insts_aext.sail riscv_insts_cext.sail riscv_insts_mext.sail riscv_insts_zicsr.sail riscv_insts_next.sail riscv_insts_hints.sail
 SAIL_DEFAULT_INST += riscv_insts_fext.sail riscv_insts_cfext.sail
-ifeq ($(ARCH),RV64)
+ifeq ($(FLEN),64)
 SAIL_DEFAULT_INST += riscv_insts_dext.sail riscv_insts_cdext.sail
 endif
 

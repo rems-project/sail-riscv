@@ -1,3 +1,4 @@
+/* ZFinX extension introduced by IAK @ Huawei Technologies Research & Development (Uk) Limited, November 2020*/ 
 #pragma once
 
 #include <stdbool.h>
@@ -8,6 +9,7 @@
 #define DEFAULT_RSTVEC     0x00001000
 
 extern bool rv_enable_pmp;
+extern bool rv_enable_zfinx;
 extern bool rv_enable_rvc;
 extern bool rv_enable_fdext;
 extern bool rv_enable_writable_misa;

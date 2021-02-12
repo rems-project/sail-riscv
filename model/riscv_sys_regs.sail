@@ -1,3 +1,4 @@
+/* ZFinX extension introduced by IAK @ Huawei Technologies Research & Development (Uk) Limited, November 2020*/ 
 /* Machine-mode and supervisor-mode state definitions. */
 
 /* privilege level */
@@ -76,6 +77,9 @@ val sys_enable_writable_misa = {c: "sys_enable_writable_misa", ocaml: "Platform.
 val sys_enable_rvc = {c: "sys_enable_rvc", ocaml: "Platform.enable_rvc", _: "sys_enable_rvc"} : unit -> bool
 /* whether misa.{f,d} were enabled at boot */
 val sys_enable_fdext = {c: "sys_enable_fdext", ocaml: "Platform.enable_fdext", _: "sys_enable_fdext"} : unit -> bool
+/* whether ZFINX was enabled at boot */
+val sys_enable_zfinx = {c: "sys_enable_zfinx",ocaml: "Platform.enable_zfinx", _:"sys_enable_zfinx"} : unit -> bool                       
+
 
 /* This function allows an extension to veto a write to Misa
    if it would violate an alignment restriction on
@@ -248,8 +252,8 @@ function in32BitMode() -> bool = {
 }
 
 /* F and D extensions have to enabled both via misa.{FD} as well as mstatus.FS */
-function haveFExt()    -> bool = (misa.F() == 0b1) & (mstatus.FS() != 0b00)
-function haveDExt()    -> bool = (misa.D() == 0b1) & (mstatus.FS() != 0b00)
+function haveFExt()    -> bool = (misa.F() == 0b1) & (mstatus.FS() != 0b00 | sys_enable_zfinx() == true)
+function haveDExt()    -> bool = (misa.D() == 0b1) & (mstatus.FS() != 0b00 | sys_enable_zfinx() == true)
 
 /* interrupt processing state */
 
