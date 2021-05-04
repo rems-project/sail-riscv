@@ -18,6 +18,19 @@ else
   $(error '$(ARCH)' is not a valid architecture, must be one of: RV32, RV64)
 endif
 
+
+CONFIG_ISA=config/isa_$(ARCH).yaml
+CONFIG_PLATFORM=config/platform.yaml
+GENERATED_CONFIG_DIR=generated_definitions/config/$(ARCH)
+RV_CONFIG=riscv-config
+RV_CONFIG2SAIL_DIR=config/riscv_config2sail
+RV_CONFIG2SAIL=$(RV_CONFIG2SAIL_DIR)/riscv_config2sail
+RV_CONFIG_SAIL=$(GENERATED_CONFIG_DIR)/riscv_config.sail
+RV_CONFIG_TYPES:=$(RV_CONFIG2SAIL_DIR)/sail/riscv_config_types.sail
+
+$(RV_CONFIG2SAIL):
+	make -C $(RV_CONFIG2SAIL_DIR)
+
 # Instruction sources, depending on target
 SAIL_CHECK_SRCS = riscv_addr_checks_common.sail riscv_addr_checks.sail riscv_misa_ext.sail
 SAIL_DEFAULT_INST = riscv_insts_base.sail riscv_insts_aext.sail riscv_insts_cext.sail riscv_insts_mext.sail riscv_insts_zicsr.sail riscv_insts_next.sail riscv_insts_hints.sail
@@ -77,12 +90,13 @@ SAIL_OTHER_SRCS     = $(SAIL_STEP_SRCS) riscv_analysis.sail
 SAIL_OTHER_COQ_SRCS = riscv_termination_common.sail riscv_termination_rv64.sail riscv_analysis.sail
 endif
 
+RV_CONFIG_SRCS =  $(RV_CONFIG_TYPES) $(RV_CONFIG_SAIL)
 
-PRELUDE_SRCS   = $(addprefix model/,$(PRELUDE))
-SAIL_SRCS      = $(addprefix model/,$(SAIL_ARCH_SRCS) $(SAIL_SEQ_INST_SRCS)  $(SAIL_OTHER_SRCS))
-SAIL_RMEM_SRCS = $(addprefix model/,$(SAIL_ARCH_SRCS) $(SAIL_RMEM_INST_SRCS) $(SAIL_OTHER_SRCS))
-SAIL_RVFI_SRCS = $(addprefix model/,$(SAIL_ARCH_RVFI_SRCS) $(SAIL_SEQ_INST_SRCS) $(RVFI_STEP_SRCS))
-SAIL_COQ_SRCS  = $(addprefix model/,$(SAIL_ARCH_SRCS) $(SAIL_SEQ_INST_SRCS) $(SAIL_OTHER_COQ_SRCS))
+PRELUDE_SRCS   = $(RV_CONFIG_SRCS) $(addprefix model/,$(PRELUDE))
+SAIL_SRCS      = $(RV_CONFIG_SRCS) $(addprefix model/,$(SAIL_ARCH_SRCS) $(SAIL_SEQ_INST_SRCS)  $(SAIL_OTHER_SRCS))
+SAIL_RMEM_SRCS = $(RV_CONFIG_SRCS) $(addprefix model/,$(SAIL_ARCH_SRCS) $(SAIL_RMEM_INST_SRCS) $(SAIL_OTHER_SRCS))
+SAIL_RVFI_SRCS = $(RV_CONFIG_SRCS) $(addprefix model/,$(SAIL_ARCH_RVFI_SRCS) $(SAIL_SEQ_INST_SRCS) $(RVFI_STEP_SRCS))
+SAIL_COQ_SRCS  = $(RV_CONFIG_SRCS) $(addprefix model/,$(SAIL_ARCH_SRCS) $(SAIL_SEQ_INST_SRCS) $(SAIL_OTHER_COQ_SRCS))
 
 PLATFORM_OCAML_SRCS = $(addprefix ocaml_emulator/,platform.ml platform_impl.ml softfloat.ml riscv_ocaml_sim.ml)
 
@@ -137,10 +151,10 @@ C_LIBS  += -L $(RISCV)/lib -lfesvr -lriscv -Wl,-rpath=$(RISCV)/lib
 endif
 
 # SAIL_FLAGS = -dtc_verbose 4
+SAIL_FLAGS += -O -Oconstant_fold
 
 ifneq (,$(COVERAGE))
 C_FLAGS += --coverage -O1
-SAIL_FLAGS += -Oconstant_fold
 else
 C_FLAGS += -O3 -flto
 endif
@@ -224,7 +238,7 @@ ocaml_emulator/tracecmp: ocaml_emulator/tracecmp.ml
 
 generated_definitions/c/riscv_model_$(ARCH).c: $(SAIL_SRCS) model/main.sail Makefile
 	mkdir -p generated_definitions/c
-	$(SAIL) $(SAIL_FLAGS) -O -Oconstant_fold -memo_z3 -c -c_include riscv_prelude.h -c_include riscv_platform.h -c_no_main $(SAIL_SRCS) model/main.sail -o $(basename $@)
+	$(SAIL) $(SAIL_FLAGS) -memo_z3 -c -c_include riscv_prelude.h -c_include riscv_platform.h -c_no_main $(SAIL_SRCS) model/main.sail -o $(basename $@)
 
 generated_definitions/c2/riscv_model_$(ARCH).c: $(SAIL_SRCS) model/main.sail Makefile
 	mkdir -p generated_definitions/c2
@@ -243,6 +257,14 @@ rvfi: c_emulator/riscv_rvfi_$(ARCH)
 
 c_emulator/riscv_sim_$(ARCH): generated_definitions/c/riscv_model_$(ARCH).c $(C_INCS) $(C_SRCS) $(SOFTFLOAT_LIBS) Makefile
 	gcc -g $(C_WARNINGS) $(C_FLAGS) $< $(C_SRCS) $(SAIL_LIB_DIR)/*.c $(C_LIBS) -o $@
+
+$(GENERATED_CONFIG_DIR)/isa_$(ARCH)_checked.yaml: $(CONFIG_ISA) $(CONFIG_PLATFORM)
+	$(RV_CONFIG) --isa_spec $(CONFIG_ISA) --platform_spec $(CONFIG_PLATFORM) --work_dir $(GENERATED_CONFIG_DIR)
+
+$(RV_CONFIG_SAIL): $(RV_CONFIG2SAIL)
+$(RV_CONFIG_SAIL): $(GENERATED_CONFIG_DIR)/isa_$(ARCH)_checked.yaml
+	mkdir -p $(GENERATED_CONFIG_DIR)
+	$(RV_CONFIG2SAIL) -i $(GENERATED_CONFIG_DIR)/isa_$(ARCH)_checked.yaml -p $(GENERATED_CONFIG_DIR)/platform_checked.yaml -o $@
 
 generated_definitions/c/riscv_rvfi_model_$(ARCH).c: $(SAIL_RVFI_SRCS) model/main.sail Makefile
 	mkdir -p generated_definitions/c
@@ -435,3 +457,5 @@ clean:
 	-rm -f handwritten_support/riscv_extras.vo handwritten_support/riscv_extras.glob handwritten_support/.riscv_extras.aux
 	-rm -f handwritten_support/mem_metadata.vo handwritten_support/mem_metadata.glob handwritten_support/.mem_metadata.aux
 	ocamlbuild -clean
+	make -C $(RV_CONFIG2SAIL_DIR) clean
+

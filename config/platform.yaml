@@ -1,0 +1,16 @@
+nmi:
+  address: 0x0
+reset:
+  address: 0x0
+mtime:
+  address: 0xbff8
+  implemented: True
+mtimecmp:
+  address: 0x4000
+  implemented: True
+mcause:
+  values: [16,17,18,19,20,21]
+  implemented: True
+scause:
+  values: [16,17,18,19,20,21]
+  implemented: True
